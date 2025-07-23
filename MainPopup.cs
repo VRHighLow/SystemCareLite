@@ -9,6 +9,8 @@ using Microsoft.VisualBasic.Devices;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Threading;
+using System.Management;
+using System.IO;
 
 
 namespace SystemCareLite
@@ -16,20 +18,46 @@ namespace SystemCareLite
     public class MainPopup : Form
     {
         // UI
-        private FlowLayoutPanel statsPanel;
-        private Label ramLabel, cpuLabel, gpuLabel, pingLabel, fpsLabel;
+        private TableLayoutPanel mainLayout;
+        private FlowLayoutPanel statsPanel, networkPanel, tempPanel, diskPanel;
+        private Label ramLabel, cpuLabel, gpuLabel, pingLabel, fpsLabel, 
+                     dlSpeedLabel, ulSpeedLabel, cpuTempLabel, gpuTempLabel, diskLabel;
         private Button hideButton, expandButton;
+        private const int PADDING = 3;
+        private readonly Font labelFont = new Font("Segoe UI", 8f, FontStyle.Regular);
+        private readonly Color backgroundColor = Color.FromArgb(30, 30, 32);
+        private readonly Color labelBackColor = Color.FromArgb(45, 45, 48);
+        private readonly Color highlightColor = Color.FromArgb(0, 122, 204);
 
         // Performance counters
         private PerformanceCounter cpuCounter;
         private float cachedGpuUsage = 0;
         private long ping = 0;
         private Random fpsMock = new();
+        
+        // Network monitoring
+        private PerformanceCounter netSentCounter;
+        private PerformanceCounter netRecvCounter;
+        private long lastNetSent = 0;
+        private long lastNetRecv = 0;
+        private DateTime lastNetUpdate = DateTime.Now;
+        
+        // Disk monitoring
+        private PerformanceCounter diskReadCounter;
+        private PerformanceCounter diskWriteCounter;
+        private long lastDiskRead = 0;
+        private long lastDiskWrite = 0;
+        private DateTime lastDiskUpdate = DateTime.Now;
+        
+        // Temperature monitoring
+        private ManagementObjectSearcher cpuTempSearcher;
+        private ManagementObjectSearcher gpuTempSearcher;
 
         // Visibility persistence
         public Dictionary<string,bool> StatVisibility { get; private set; } = new()
         {
-            ["RAM"]=true, ["CPU"]=true, ["GPU"]=true, ["Ping"]=true, ["FPS"]=true
+            ["RAM"]=true, ["CPU"]=true, ["GPU"]=true, ["Ping"]=true, ["FPS"]=true,
+            ["Download"]=true, ["Upload"]=true, ["CPU Temp"]=true, ["GPU Temp"]=true, ["Disk"]=true
         };
 
         // Idle‐tracking for RAM cleanup
@@ -64,37 +92,129 @@ namespace SystemCareLite
             // Form setup
             FormBorderStyle = FormBorderStyle.None;
             TopMost = true;
-            BackColor = Color.Black;
+            BackColor = backgroundColor;
             ForeColor = Color.White;
             ShowInTaskbar = false;
             StartPosition = FormStartPosition.Manual;
-            Width = 420; Height = 50;
+            Width = 380; // Reduced from 420
+            Height = 55; // Reduced from 50
             var wa = Screen.PrimaryScreen.WorkingArea;
             Location = new Point((wa.Width - Width) / 2, wa.Height - Height - 100);
-            Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width, Height, 30, 30));
+            Region = Region.FromHrgn(CreateRoundRectRgn(0, 0, Width, Height, 15, 15)); // Smaller border radius
 
-            // Stats panel
+            // Main layout
+            mainLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 4,
+                AutoSize = true,
+                Padding = new Padding(PADDING),
+                BackColor = Color.Black,
+                CellBorderStyle = TableLayoutPanelCellBorderStyle.None
+            };
+            mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            mainLayout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            
+            // Main stats panel (CPU, RAM, GPU, Ping, FPS)
             statsPanel = new FlowLayoutPanel
             {
                 FlowDirection = FlowDirection.LeftToRight,
-                WrapContents = false,
+                WrapContents = true,
                 AutoSize = true,
-                Location = new Point(10, 10),
-                BackColor = Color.Black
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, 5)
             };
-            ramLabel = MakeLabel("RAM: --%");
-            cpuLabel = MakeLabel("CPU: --%");
-            gpuLabel = MakeLabel("GPU: --%");
-            pingLabel = MakeLabel("Ping: --ms");
-            fpsLabel = MakeLabel("FPS: --");
-            statsPanel.Controls.AddRange(new Control[]{ ramLabel, cpuLabel, gpuLabel, pingLabel, fpsLabel });
-            Controls.Add(statsPanel);
-
-            // Hide & expand buttons
-            hideButton = MakeButton("✕", new Point(Width - 25, 5), (_,__) => Hide());
-            expandButton = MakeButton("︾", new Point(Width - 25, Height - 25), (_,__) => ToggleExtended());
+            
+            // Network panel
+            networkPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, 5)
+            };
+            
+            // Temperature panel
+            tempPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent,
+                Margin = new Padding(0, 0, 0, 5)
+            };
+            
+            // Disk panel
+            diskPanel = new FlowLayoutPanel
+            {
+                FlowDirection = FlowDirection.LeftToRight,
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                BackColor = Color.Transparent
+            };
+            
+            // Create and style labels with consistent padding
+            ramLabel = MakeLabel("RAM: --%", 10);
+            cpuLabel = MakeLabel("CPU: --%", 10);
+            gpuLabel = MakeLabel("GPU: --%", 10);
+            pingLabel = MakeLabel("Ping: --ms", 10);
+            fpsLabel = MakeLabel("FPS: --", 10);
+            dlSpeedLabel = MakeLabel("▼ -- MB/s", 10);
+            ulSpeedLabel = MakeLabel("▲ -- MB/s", 10);
+            cpuTempLabel = MakeLabel("CPU: --°C", 10);
+            gpuTempLabel = MakeLabel("GPU: --°C", 10);
+            diskLabel = MakeLabel("💾 --%", 10);
+            
+            // Add labels to their respective panels
+            statsPanel.Controls.AddRange(new Control[] {
+                cpuLabel, ramLabel, gpuLabel, pingLabel, fpsLabel
+            });
+            
+            networkPanel.Controls.AddRange(new Control[] {
+                dlSpeedLabel, ulSpeedLabel
+            });
+            
+            tempPanel.Controls.AddRange(new Control[] {
+                cpuTempLabel, gpuTempLabel
+            });
+            
+            diskPanel.Controls.Add(diskLabel);
+            
+            // Add panels to main layout
+            mainLayout.Controls.Add(statsPanel, 0, 0);
+            mainLayout.Controls.Add(networkPanel, 0, 1);
+            mainLayout.Controls.Add(tempPanel, 0, 2);
+            mainLayout.Controls.Add(diskPanel, 0, 3);
+            
+            // Initialize performance counters
+            InitializePerformanceCounters();
+            
+            // Add main layout to form
+            Controls.Add(mainLayout);
+            
+            // Close & expand buttons
+            hideButton = MakeButton("✕", new Point(Width - 22, 4), (_,__) => Application.Exit());
+            expandButton = MakeButton("⋮", new Point(Width - 22, Height - 22), (_,__) => ToggleExtended());
+            
+            // Style buttons
+            hideButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            expandButton.Font = new Font("Segoe UI", 9f, FontStyle.Bold);
+            
             Controls.Add(hideButton);
             Controls.Add(expandButton);
+            
+            // Ensure buttons stay on top
+            hideButton.BringToFront();
+            expandButton.BringToFront();
+            
+            // Set form size based on content
+            Size = new Size(420, mainLayout.Height + 20);
 
             // CPU counter + update timer
             cpuCounter = new PerformanceCounter("Processor","% Processor Time","_Total");
@@ -121,13 +241,15 @@ namespace SystemCareLite
             {
                 extendedPopup = new ExtendedPopup(this);
                 extendedPopup.StartPosition = FormStartPosition.Manual;
-                extendedPopup.Location = new Point(Left, Bottom + 2);
+                // Position the popup directly below the main form
+                extendedPopup.Location = new Point(Left, Location.Y + Height + 2);
                 extendedPopup.Show();
                 expandButton.Text = "︽";
             }
             else
             {
                 extendedPopup.Close();
+                extendedPopup = null;
                 expandButton.Text = "︾";
             }
         }
@@ -144,6 +266,11 @@ namespace SystemCareLite
                 case "GPU":  gpuLabel.Visible = visible; break;
                 case "Ping": pingLabel.Visible = visible; break;
                 case "FPS":  fpsLabel.Visible = visible; break;
+                case "Download": dlSpeedLabel.Visible = visible; break;
+                case "Upload": ulSpeedLabel.Visible = visible; break;
+                case "CPU Temp": cpuTempLabel.Visible = visible; break;
+                case "GPU Temp": gpuTempLabel.Visible = visible; break;
+                case "Disk": diskLabel.Visible = visible; break;
             }
         }
 
@@ -161,13 +288,243 @@ namespace SystemCareLite
             return true; // if never seen, treat as idle
         }
 
+        private void InitializePerformanceCounters()
+        {
+            try
+            {
+                // Network counters - handle case where the interface might not exist
+                try
+                {
+                    var networkInterfaces = NetworkInterface.GetAllNetworkInterfaces()
+                        .Where(ni => ni.OperationalStatus == OperationalStatus.Up && 
+                                   ni.NetworkInterfaceType != NetworkInterfaceType.Loopback &&
+                                   !ni.Description.Contains("Virtual") &&
+                                   !ni.Description.Contains("VPN"))
+                        .ToList();
+
+                    foreach (var ni in networkInterfaces)
+                    {
+                        try
+                        {
+                            string instanceName = ni.Name.Replace('(', '[').Replace(']', ')');
+                            netSentCounter = new PerformanceCounter("Network Interface", "Bytes Sent/sec", instanceName);
+                            netRecvCounter = new PerformanceCounter("Network Interface", "Bytes Received/sec", instanceName);
+                            netSentCounter.NextValue();
+                            netRecvCounter.NextValue();
+                            break; // Use the first working interface
+                        }
+                        catch (Exception ex)
+                        {
+                            Debug.WriteLine($"Failed to initialize network counter for {ni.Name}: {ex.Message}");
+                            netSentCounter = null;
+                            netRecvCounter = null;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Network interface initialization failed: {ex.Message}");
+                    netSentCounter = null;
+                    netRecvCounter = null;
+                }
+
+                // Disk counters
+                try
+                {
+                    diskReadCounter = new PerformanceCounter("PhysicalDisk", "Disk Read Bytes/sec", "_Total");
+                    diskWriteCounter = new PerformanceCounter("PhysicalDisk", "Disk Write Bytes/sec", "_Total");
+                    diskReadCounter.NextValue();
+                    diskWriteCounter.NextValue();
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Disk counter initialization failed: {ex.Message}");
+                    diskReadCounter = null;
+                    diskWriteCounter = null;
+                }
+
+                // Temperature monitoring - wrap in try-catch to prevent crashes
+                try
+                {
+                    cpuTempSearcher = new ManagementObjectSearcher(
+                        "root\\WMI", 
+                        "SELECT * FROM MSAcpi_ThermalZoneTemperature");
+                    
+                    gpuTempSearcher = new ManagementObjectSearcher(
+                        "root\\CIMV2", 
+                        "SELECT * FROM Win32_VideoController");
+                }
+                catch (Exception ex)
+                {
+                    Debug.WriteLine($"Temperature monitoring initialization failed: {ex.Message}");
+                    cpuTempSearcher = null;
+                    gpuTempSearcher = null;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Failed to initialize performance counters: {ex.Message}");
+            }
+        }
+
+        private float GetCpuTemperature()
+        {
+            try
+            {
+                if (cpuTempSearcher == null)
+                    return 0;
+
+                foreach (ManagementObject obj in cpuTempSearcher.Get())
+                {
+                    if (obj["CurrentTemperature"] != null)
+                    {
+                        double temp = Convert.ToDouble(obj["CurrentTemperature"].ToString());
+                        return (float)(temp / 10.0 - 273.15); // Convert to Celsius
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error getting CPU temperature: {ex.Message}");
+            }
+            return 0;
+        }
+
+        private float GetGpuTemperature()
+        {
+            try
+            {
+                if (gpuTempSearcher == null)
+                    return 0;
+
+                foreach (ManagementObject obj in gpuTempSearcher.Get())
+                {
+                    // Try to get temperature if available
+                    if (obj["CurrentTemperature"] != null)
+                    {
+                        return Convert.ToSingle(obj["CurrentTemperature"]) - 273.15f;
+                    }
+                    // Alternative temperature property used by some GPUs
+                    else if (obj["Temperature"] != null)
+                    {
+                        return Convert.ToSingle(obj["Temperature"]);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error getting GPU temperature: {ex.Message}");
+            }
+            return 0;
+        }
+
+        private (float sent, float received) GetNetworkSpeed()
+        {
+            try
+            {
+                if (netSentCounter == null || netRecvCounter == null)
+                    return (0, 0);
+
+                float sent = netSentCounter.NextValue();
+                float received = netRecvCounter.NextValue();
+                return (sent, received);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error getting network speed: {ex.Message}");
+                return (0, 0);
+            }
+        }
+
+        private (float read, float write) GetDiskSpeed()
+        {
+            if (diskReadCounter == null || diskWriteCounter == null)
+                return (0, 0);
+
+            float read = diskReadCounter.NextValue();
+            float write = diskWriteCounter.NextValue();
+            return (read, write);
+        }
+
+        private float GetDiskUsage()
+        {
+            try
+            {
+                DriveInfo drive = new DriveInfo(Path.GetPathRoot(Environment.SystemDirectory));
+                if (drive.IsReady)
+                {
+                    float totalSpace = drive.TotalSize;
+                    float freeSpace = drive.AvailableFreeSpace;
+                    return ((totalSpace - freeSpace) / totalSpace) * 100;
+                }
+            }
+            catch { }
+            return 0;
+        }
+
         private void UpdateUI()
         {
-            cpuLabel.Text = $"CPU: {cpuCounter.NextValue():F0}%";
-            ramLabel.Text = $"RAM: {GetRamUsage():F0}%";
-            gpuLabel.Text = $"GPU: {cachedGpuUsage:F0}%";
-            pingLabel.Text = $"Ping: {ping}ms";
-            fpsLabel.Text = IsFullscreen() ? $"FPS: {fpsMock.Next(200,245)}" : "FPS: --";
+            try
+            {
+                // Update basic metrics - these are always visible
+                cpuLabel.Text = $"CPU {Math.Min(100, cpuCounter.NextValue()):F0}%";
+                ramLabel.Text = $"RAM {Math.Min(100, GetRamUsage()):F0}%";
+                gpuLabel.Text = $"GPU {Math.Min(100, cachedGpuUsage):F0}%";
+                pingLabel.Text = $"PING {ping}ms";
+                fpsLabel.Text = IsFullscreen() ? $"FPS {fpsMock.Next(200,245)}" : "FPS --";
+                
+                // Update network speeds if counters are available
+                if (netSentCounter != null && netRecvCounter != null)
+                {
+                    var (sent, received) = GetNetworkSpeed();
+                    dlSpeedLabel.Text = $"▼ {received / (1024 * 1024):0.1}";
+                    ulSpeedLabel.Text = $"▲ {sent / (1024 * 1024):0.1}";
+                }
+                else
+                {
+                    dlSpeedLabel.Text = "▼ --";
+                    ulSpeedLabel.Text = "▲ --";
+                }
+                
+                // Update temperatures if available
+                try
+                {
+                    float cpuTemp = GetCpuTemperature();
+                    cpuTempLabel.Text = cpuTemp > 0 ? $"CPU {cpuTemp:0}°" : "CPU --°";
+                }
+                catch
+                {
+                    cpuTempLabel.Text = "CPU --°C";
+                }
+
+                try
+                {
+                    float gpuTemp = GetGpuTemperature();
+                    gpuTempLabel.Text = gpuTemp > 0 ? $"GPU {gpuTemp:0}°" : "GPU --°";
+                }
+                catch
+                {
+                    gpuTempLabel.Text = "GPU --°C";
+                }
+                
+                // Update disk usage if available
+                try
+                {
+                    float diskUsage = GetDiskUsage();
+                    diskLabel.Text = $"💾 {Math.Min(100, diskUsage):F0}%";
+                }
+                catch
+                {
+                    diskLabel.Text = "💾 --%";
+                }
+                
+                // Ensure the form is properly sized for the content
+                Size = new Size(420, mainLayout.Height + 20);
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Error in UpdateUI: {ex.Message}");
+            }
         }
 
         private bool IsFullscreen()
@@ -240,26 +597,36 @@ private void StartGpuLoop()
             });
 
         // UI helpers
-        private Label MakeLabel(string txt) => new Label
+        private Label MakeLabel(string text, int rightPadding = 0) => new()
         {
-            Text = txt,
+            Text = text,
             AutoSize = true,
-            Margin = new Padding(10,0,10,0),
+            Margin = new Padding(2, 1, rightPadding, 1), // Reduced margins
+            Padding = new Padding(3, 1, 3, 1), // Reduced padding
+            Font = labelFont,
             ForeColor = Color.White,
-            BackColor = Color.Black
+            BackColor = labelBackColor,
+            MinimumSize = new Size(60, 18), // More compact
+            TextAlign = ContentAlignment.MiddleCenter,
+            BorderStyle = BorderStyle.None
         };
         private Button MakeButton(string txt, Point loc, EventHandler onClick)
         {
             var b = new Button
             {
                 Text = txt,
-                Width = 20, Height = 20,
+                Width = 18, Height = 18, // Slightly smaller buttons
                 FlatStyle = FlatStyle.Flat,
-                BackColor = Color.Black,
+                BackColor = Color.Transparent,
                 ForeColor = Color.White,
-                Location = loc
+                Location = loc,
+                FlatAppearance = {
+                    BorderSize = 0,
+                    MouseOverBackColor = highlightColor,
+                    MouseDownBackColor = Color.FromArgb(0, 92, 156)
+                },
+                Cursor = Cursors.Hand
             };
-            b.FlatAppearance.BorderSize = 0;
             b.Click += onClick;
             return b;
         }

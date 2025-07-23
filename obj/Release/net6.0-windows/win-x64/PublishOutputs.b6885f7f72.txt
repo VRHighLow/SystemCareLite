@@ -1,0 +1,7 @@
+C:\Users\Owner\Documents\systemcare app\publish\SystemCareLite.pdb
+C:\Users\Owner\Documents\systemcare app\publish\D3DCompiler_47_cor3.dll
+C:\Users\Owner\Documents\systemcare app\publish\PenImc_cor3.dll
+C:\Users\Owner\Documents\systemcare app\publish\PresentationNative_cor3.dll
+C:\Users\Owner\Documents\systemcare app\publish\vcruntime140_cor3.dll
+C:\Users\Owner\Documents\systemcare app\publish\wpfgfx_cor3.dll
+C:\Users\Owner\Documents\systemcare app\publish\SystemCareLite.exe
