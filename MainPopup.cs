@@ -235,24 +235,33 @@ namespace SystemCareLite
             RegisterDrag(this);
         }
 
-        private void ToggleExtended()
+   private int? extendedPopupOffsetY = null;
+
+private void ToggleExtended()
+{
+    if (extendedPopup == null || extendedPopup.IsDisposed)
+    {
+        extendedPopup = new ExtendedPopup(this);
+        extendedPopup.StartPosition = FormStartPosition.Manual;
+        
+        // Calculate offset on first open, then reuse it
+        if (!extendedPopupOffsetY.HasValue)
         {
-            if (extendedPopup == null || extendedPopup.IsDisposed)
-            {
-                extendedPopup = new ExtendedPopup(this);
-                extendedPopup.StartPosition = FormStartPosition.Manual;
-                // Position the popup directly below the main form
-                extendedPopup.Location = new Point(Left, Location.Y + Height + 2);
-                extendedPopup.Show();
-                expandButton.Text = "︽";
-            }
-            else
-            {
-                extendedPopup.Close();
-                extendedPopup = null;
-                expandButton.Text = "︾";
-            }
+            extendedPopupOffsetY = 200 - Top; // 200 is the desired Y position on screen
         }
+        
+        // Apply the fixed offset
+        extendedPopup.Location = new Point(Left, Top + extendedPopupOffsetY.Value);
+        extendedPopup.Show();
+        expandButton.Text = "︽";
+    }
+    else
+    {
+        extendedPopup.Close();
+        extendedPopup = null;
+        expandButton.Text = "︾";
+    }
+}
 
         public bool GetStatVisibility(string key)
             => StatVisibility.TryGetValue(key, out var v) && v;

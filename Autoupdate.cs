@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using System.Diagnostics.CodeAnalysis;
+using System.Windows.Forms;
 
 namespace SystemCareLite
 {
@@ -21,6 +22,7 @@ namespace SystemCareLite
         private const string GitHubRepo  = "SystemCareLite";
         // The asset name exactly as it appears in your release (single.exe)
         private const string AssetName   = "SystemCareLite.exe";
+        private static readonly string TempPath = Path.Combine(Path.GetTempPath(), "SystemCareLite_Update");
 
         // ─── PUBLIC ENTRY POINTS ──────────────────────────────────────────────
 
@@ -59,9 +61,21 @@ namespace SystemCareLite
         /// Fire‐and‐forget: checks GitHub latest release and, if newer, downloads & invokes self‐update.
         /// </summary>
         [RequiresAssemblyFiles()]
-        public static void InitializeAsync()
+        public static async void InitializeAsync()
         {
-            _ = CheckForUpdatesAsync();
+            try
+            {
+                // Ensure temp directory exists
+                if (!Directory.Exists(TempPath))
+                    Directory.CreateDirectory(TempPath);
+
+                // Check for updates
+                await CheckForUpdatesAsync();
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"Update check failed: {ex.Message}");
+            }
         }
 
         // ─── IMPLEMENTATION ────────────────────────────────────────────────────
@@ -92,36 +106,49 @@ namespace SystemCareLite
 
                 // 4) Find the EXE asset
                 var assets = (root["assets"] as JArray) ?? new JArray();
-                var asset  = assets.FirstOrDefault(a =>
+                var asset = assets.FirstOrDefault(a =>
                     string.Equals(a.Value<string>("name"),
-                                  AssetName,
-                                  StringComparison.OrdinalIgnoreCase));
+                                AssetName,
+                                StringComparison.OrdinalIgnoreCase));
                 if (asset == null) return;
 
-                var downloadUrl = asset.Value<string>("browser_download_url");
-                if (string.IsNullOrEmpty(downloadUrl)) return;
+                // 5) Get release notes
+                var releaseNotes = root.Value<string>("body") ?? "New update available";
+                var releaseUrl = asset.Value<string>("browser_download_url");
+                if (string.IsNullOrEmpty(releaseUrl)) return;
 
-                // 5) Download to temp
-                var tempFile = Path.Combine(
-                    Path.GetTempPath(),
-                    $"{AssetName}_{latestVersion}.tmp");
-                using (var resp = await http.GetAsync(downloadUrl).ConfigureAwait(false))
+                // 6) Notify user and ask for update
+                if (MessageBox.Show(
+                    $"Version {latestVersion} is available!\n\nRelease notes:\n{releaseNotes}\n\nUpdate now?",
+                    "Update Available",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Information) != DialogResult.Yes)
                 {
-                    resp.EnsureSuccessStatusCode();
-                    await using var fs = File.Create(tempFile);
-                    await resp.Content.CopyToAsync(fs).ConfigureAwait(false);
+                    return;
                 }
 
-                // 6) Relaunch ourselves in self‐update mode
-                var exePath = Assembly.GetExecutingAssembly().Location;
-                Process.Start(new ProcessStartInfo(exePath)
+                // 7) Download the update
+                var tempFile = Path.Combine(TempPath, $"update_{latestVersion}.exe");
+                using (var client = new HttpClient())
                 {
-                    Arguments       = $"--self-update \"{exePath}\" \"{tempFile}\"",
-                    UseShellExecute = false,
-                    CreateNoWindow  = true
+                    var response = await client.GetAsync(releaseUrl);
+                    response.EnsureSuccessStatusCode();
+                    using (var fileStream = File.Create(tempFile))
+                    {
+                        await response.Content.CopyToAsync(fileStream);
+                    }
+                }
+
+                // 8) Launch updater and exit
+                var currentExe = Process.GetCurrentProcess().MainModule.FileName;
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = tempFile,
+                    Arguments = $"--self-update \"{currentExe}\" \"{tempFile}\"",
+                    UseShellExecute = true
                 });
 
-                // 7) Exit so updater can overwrite
+                // 9) Exit the current instance
                 Environment.Exit(0);
             }
             catch
