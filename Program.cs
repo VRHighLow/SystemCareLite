@@ -16,18 +16,14 @@ namespace SystemCareLite
         [RequiresAssemblyFiles("Calls SystemCareLite.AutoUpdater.InitializeAsync()")]
         static void Main(string[] args)
         {
-            // ── 1) Handle a self‐update swap invocation ──────────────────────
-            if (AutoUpdater.HandleSelfUpdate(args))
-                return;
-
-            // ── 2) Usual startup config ─────────────────────────────────────
+            // ── 1) Usual startup config ─────────────────────────────────────
             ApplicationConfiguration.Initialize();
             EnsureRunsAtStartup();
 
-            // ── 3) Kick off GitHub‐based update check in background ────────
+            // ── 2) Kick off GitHub‐based update check in background ────────
             AutoUpdater.InitializeAsync();
 
-            // ── 4) Finally show tray icon & popup context ─────────────────
+            // ── 3) Show tray icon & popup context ────────────────────────
             Application.Run(new TrayAppContext());
         }
 

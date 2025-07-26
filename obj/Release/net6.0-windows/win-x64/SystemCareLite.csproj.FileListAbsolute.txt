@@ -514,3 +514,5 @@ C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\refin
 C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\SystemCareLite.pdb
 C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\SystemCareLite.genruntimeconfig.cache
 C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\ref\SystemCareLite.dll
+C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\SystemCareLite.AssemblyInfoInputs.cache
+C:\Users\Owner\Documents\SystemCareLite\obj\Release\net6.0-windows\win-x64\SystemCareLite.AssemblyInfo.cs
