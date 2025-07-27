@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -115,19 +116,30 @@ namespace SystemCareLite
                     return;
                 }
 
+                // Handle version strings with more than 3 parts (e.g., 1.2.3.4)
+                var versionParts = versionString.Split('.');
+                if (versionParts.Length > 3)
+                {
+                    versionString = string.Join(".", versionParts.Take(3));
+                }
+
                 if (!Version.TryParse(versionString, out var latestVersion))
                 {
                     LogToFile($"Invalid version format from GitHub: {versionString}");
                     return;
                 }
 
-                LogToFile($"Latest version on GitHub: {latestVersion}");
+                LogToFile($"Current version: {currentVersion}, Latest version on GitHub: {latestVersion}");
 
-                if (latestVersion <= currentVersion)
+                // Compare versions
+                var versionComparison = currentVersion.CompareTo(latestVersion);
+                if (versionComparison >= 0)
                 {
-                    LogToFile("Application is up to date");
+                    LogToFile($"Application is up to date (Current: {currentVersion}, Latest: {latestVersion})");
                     return;
                 }
+
+                LogToFile($"Update available! Current: {currentVersion}, Latest: {latestVersion}");
 
                 // Show update prompt on UI thread
                 var releaseNotes = release["body"]?.ToString() ?? "No release notes available.";
@@ -239,25 +251,26 @@ namespace SystemCareLite
             try
             {
                 LogToFile("Starting update process...");
-
-                // Find the asset to download
-                var assets = release["assets"] as JArray;
-                var asset = assets?.FirstOrDefault(a => 
-                    a["name"]?.ToString().Equals(AssetName, StringComparison.OrdinalIgnoreCase) == true);
                 
-                if (asset == null)
+                // Get the download URL directly from the latest release
+                var downloadUrl = $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases/latest/download/{AssetName}";
+                LogToFile($"Using direct download URL: {downloadUrl}");
+                
+                // Get the current executable path
+                var currentExe = Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(currentExe))
                 {
-                    LogToFile("Error: No matching asset found in release");
+                    LogToFile("Error: Could not determine current executable path");
                     return;
                 }
-
-                var downloadUrl = asset["browser_download_url"]?.ToString();
-                if (string.IsNullOrEmpty(downloadUrl))
+                
+                var currentDir = Path.GetDirectoryName(currentExe);
+                if (string.IsNullOrEmpty(currentDir))
                 {
-                    LogToFile("Error: No download URL found for asset");
+                    LogToFile("Error: Could not determine current directory");
                     return;
                 }
-
+                
                 // Ensure temp directory exists
                 if (!Directory.Exists(TempPath))
                 {
@@ -265,7 +278,7 @@ namespace SystemCareLite
                     LogToFile($"Created temp directory: {TempPath}");
                 }
 
-                // Download the update
+                // Download the update to a temporary file
                 var tempFile = Path.Combine(TempPath, $"update_{DateTime.Now:yyyyMMddHHmmss}.exe");
                 LogToFile($"Downloading update from {downloadUrl} to {tempFile}");
                 
@@ -284,10 +297,15 @@ namespace SystemCareLite
 
                 LogToFile("Download completed successfully");
 
-                // Create update script
+                // Get current executable path if not already determined
+                if (string.IsNullOrEmpty(currentExe))
+                {
+                    currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? 
+                        Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{AppName}.exe");
+                }
+
+                // Create update script paths
                 var batchFile = Path.Combine(TempPath, "update.bat");
-                var currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? 
-                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, $"{AppName}.exe");
                 var targetExe = Path.Combine(ProgramFilesPath, $"{AppName}.exe");
                 var logFile = Path.Combine(TempPath, "update_log.txt");
                 var vbsScript = Path.Combine(TempPath, "create_shortcut.vbs");
@@ -305,76 +323,49 @@ oLink.Save
                 await File.WriteAllTextAsync(vbsScript, vbsContent);
 
                 // Create batch file with properly escaped content
-                var batchContent = new System.Text.StringBuilder();
-                batchContent.AppendLine("@echo off");
-                batchContent.AppendLine("chcp 65001 >nul");
-                batchContent.AppendLine($"title {AppName} Updater");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Log file");
-                batchContent.AppendLine($"set LOG=\"{logFile}\"");
-                batchContent.AppendLine("echo =================================== > %LOG%");
-                batchContent.AppendLine($"echo    {AppName} Updater >> %LOG%");
-                batchContent.AppendLine("echo =================================== >> %LOG%");
-                batchContent.AppendLine("echo [%DATE% %TIME%] Starting update process... >> %LOG%");
-                batchContent.AppendLine();
-                batchContent.AppendLine("echo [%DATE% %TIME%] Checking for administrator privileges... >> %LOG%");
-                batchContent.AppendLine("net session >nul 2>&1");
-                batchContent.AppendLine("if %ERRORLEVEL% == 0 (").AppendLine("    echo [%DATE% %TIME%] Running with administrator privileges >> %LOG%");
-                batchContent.AppendLine(") else (").AppendLine("    echo [%DATE% %TIME%] ERROR: This update requires administrator privileges >> %LOG%");
-                batchContent.AppendLine("    echo This update requires administrator privileges. Please run as Administrator.");
-                batchContent.AppendLine("    pause");
-                batchContent.AppendLine("    exit /b 1");
-                batchContent.AppendLine(")");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Create installation directory if it doesn't exist");
-                batchContent.AppendLine($"echo [%DATE% %TIME%] Ensuring installation directory exists: {ProgramFilesPath} >> %LOG%");
-                batchContent.AppendLine($"if not exist \"{ProgramFilesPath}\" (").AppendLine($"    mkdir \"{ProgramFilesPath}\"");
-                batchContent.AppendLine("    if %ERRORLEVEL% NEQ 0 (").AppendLine("        echo [%DATE% %TIME%] ERROR: Failed to create installation directory. Error: %ERRORLEVEL% >> %LOG%");
-                batchContent.AppendLine("        echo Failed to create installation directory. Error: %ERRORLEVEL%");
-                batchContent.AppendLine("        pause");
-                batchContent.AppendLine("        exit /b 1");
-                batchContent.AppendLine("    )");
-                batchContent.AppendLine(")");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Wait for the application to close");
-                batchContent.AppendLine($"echo [%DATE% %TIME%] Waiting for {AppName} to close... >> %LOG%");
-                batchContent.AppendLine(":check_running");
-                batchContent.AppendLine($"tasklist /FI \"IMAGENAME eq {Path.GetFileName(currentExe)}\" | find \"{Path.GetFileNameWithoutExtension(currentExe)}\" >nul");
-                batchContent.AppendLine("if %ERRORLEVEL% == 0 (").AppendLine("    timeout /t 2 /nobreak >nul");
-                batchContent.AppendLine("    goto check_running");
-                batchContent.AppendLine(")");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Copy new version");
-                batchContent.AppendLine("echo [%DATE% %TIME%] Installing new version... >> %LOG%");
-                batchContent.AppendLine($"copy /Y \"{tempFile}\" \"{targetExe}\" >nul");
-                batchContent.AppendLine("if %ERRORLEVEL% NEQ 0 (").AppendLine("    echo [%DATE% %TIME%] ERROR: Failed to copy new version. Error: %ERRORLEVEL% >> %LOG%");
-                batchContent.AppendLine("    echo Failed to install update. Error: %ERRORLEVEL%");
-                batchContent.AppendLine("    pause");
-                batchContent.AppendLine("    exit /b 1");
-                batchContent.AppendLine(")");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Create shortcut in Startup folder");
-                batchContent.AppendLine("echo [%DATE% %TIME%] Creating shortcut in Startup folder... >> %LOG%");
-                batchContent.AppendLine($"cscript //nologo \"{vbsScript}\" >> %LOG% 2>&1");
-                batchContent.AppendLine("if %ERRORLEVEL% NEQ 0 (").AppendLine("    echo [%DATE% %TIME%] WARNING: Failed to create startup shortcut. Error: %ERRORLEVEL% >> %LOG%");
-                batchContent.AppendLine(")");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Start the new version");
-                batchContent.AppendLine($"echo [%DATE% %TIME%] Starting {AppName}... >> %LOG%");
-                batchContent.AppendLine($"start \"\" /D\"{Path.GetDirectoryName(targetExe)}\" \"{targetExe}\"");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Cleanup");
-                batchContent.AppendLine("echo [%DATE% %TIME%] Cleaning up... >> %LOG%");
-                batchContent.AppendLine($"del \"{tempFile}\" >nul 2>&1");
-                batchContent.AppendLine($"del \"{vbsScript}\" >nul 2>&1");
-                batchContent.AppendLine("del \"%~f0\"");
-                batchContent.AppendLine();
-                batchContent.AppendLine(":: Done");
-                batchContent.AppendLine("echo [%DATE% %TIME%] Update completed successfully! >> %LOG%");
-                batchContent.AppendLine("echo Update completed successfully!");
-                batchContent.AppendLine("timeout /t 5 >nul");
-                batchContent.AppendLine("exit");
+              // In the DownloadAndInstallUpdateAsync method, replace the batch script generation with this:
 
+var batchContent = new StringBuilder();
+batchContent.AppendLine("@echo off");
+batchContent.AppendLine("setlocal enabledelayedexpansion");
+batchContent.AppendLine("echo =================================================================");
+batchContent.AppendLine("echo ================ SystemCareLite Update Process =================");
+batchContent.AppendLine("echo =================================================================");
+batchContent.AppendLine("echo.");
+batchContent.AppendLine("echo [%TIME%] Stopping SystemCareLite...");
+batchContent.AppendLine($"taskkill /F /IM \"{Path.GetFileName(currentExe)}\" >nul 2>&1");
+batchContent.AppendLine("timeout /t 1 /nobreak >nul");
+batchContent.AppendLine();
+batchContent.AppendLine("echo [%TIME%] Updating to new version...");
+batchContent.AppendLine($"if exist \"{targetExe}\" (");
+batchContent.AppendLine("    del /F /Q \"" + targetExe + "\"");
+batchContent.AppendLine("    if errorlevel 1 (");
+batchContent.AppendLine("        echo [%TIME%] ERROR: Could not remove old version");
+batchContent.AppendLine("        pause");
+batchContent.AppendLine("        exit /b 1");
+batchContent.AppendLine("    )");
+batchContent.AppendLine(")");
+batchContent.AppendLine();
+batchContent.AppendLine($"copy /Y \"{tempFile}\" \"{targetExe}\"");
+batchContent.AppendLine("if errorlevel 1 (");
+batchContent.AppendLine("    echo [%TIME%] ERROR: Failed to copy new version");
+batchContent.AppendLine("    pause");
+batchContent.AppendLine("    exit /b 1");
+batchContent.AppendLine(")");
+batchContent.AppendLine();
+batchContent.AppendLine("echo [%TIME%] Starting updated version...");
+batchContent.AppendLine($"start \"\" \"{targetExe}\"");
+batchContent.AppendLine();
+batchContent.AppendLine("echo [%TIME%] Cleaning up temporary files...");
+batchContent.AppendLine($"del /F /Q \"{tempFile}\" >nul 2>&1");
+batchContent.AppendLine($"del /F /Q \"{vbsScript}\" >nul 2>&1");
+batchContent.AppendLine("echo [%TIME%] Update completed successfully!");
+batchContent.AppendLine("echo.");
+batchContent.AppendLine("echo This window will close in 3 seconds...");
+batchContent.AppendLine("timeout /t 3 >nul");
+batchContent.AppendLine("exit");
+
+                
                 await File.WriteAllTextAsync(batchFile, batchContent.ToString());
                 LogToFile($"Created update batch file: {batchFile}");
 
@@ -382,15 +373,24 @@ oLink.Save
                 var startInfo = new ProcessStartInfo
                 {
                     FileName = "cmd.exe",
-                    Arguments = $@"/c ""{batchFile}""",
+                    Arguments = $"/k \"{batchFile}\"",
                     UseShellExecute = true,
                     Verb = "runas",
                     WindowStyle = ProcessWindowStyle.Normal,
-                    CreateNoWindow = false
+                    CreateNoWindow = false,
+                    WorkingDirectory = Path.GetTempPath()
                 };
 
                 LogToFile("Starting update process with admin privileges...");
-                Process.Start(startInfo);
+                try 
+                {
+                    Process.Start(startInfo);
+                }
+                catch (Exception ex)
+                {
+                    LogToFile($"Failed to start update process: {ex}");
+                    throw;
+                }
                 
                 // Exit the current instance
                 LogToFile("Exiting current instance...");
